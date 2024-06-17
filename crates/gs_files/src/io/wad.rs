@@ -18,13 +18,12 @@ use futures::{
 };
 use goldsrc_rs::{wad::Entry, wad_entries, CStr16};
 
-// TODO : generalize for valve asset reader?
 pub struct WadAssetReader {
     entries: HashMap<CStr16, Entry>,
 }
 
 impl WadAssetReader {
-    pub fn new(root_path: &Path) -> Self {
+    pub fn new(root_path: impl AsRef<Path>) -> Self {
         let mut entries = HashMap::new();
 
         match fs::read_dir(root_path) {
@@ -33,14 +32,15 @@ impl WadAssetReader {
                     let entry = match entry {
                         Ok(entry) => entry,
                         Err(err) => {
-                            error!(?err, "error reading entry");
+                            error!(%err, "error reading entry");
                             continue;
                         }
                     };
                     let path = entry.path();
-                    if path.extension() == Some(OsStr::new("wad"))
-                        || path.extension() == Some(OsStr::new("WAD"))
-                    {
+                    let Some(extension) = path.extension() else {
+                        continue;
+                    };
+                    if extension.eq_ignore_ascii_case("wad") {
                         match File::open(&path)
                             .map(BufReader::new)
                             .and_then(|reader| wad_entries(reader, true))
@@ -50,14 +50,14 @@ impl WadAssetReader {
                                 entries.extend(x.into_iter());
                             }
                             Err(err) => {
-                                error!(?err, "error reading wad");
+                                error!(%err, "error reading wad");
                             }
                         }
                     }
                 }
             }
             Err(err) => {
-                error!(?err, "error reading directory");
+                error!(%err, "error reading directory");
             }
         };
 
@@ -71,13 +71,16 @@ impl AssetReader for WadAssetReader {
         path: &'a Path,
     ) -> BoxedFuture<'a, Result<Box<Reader<'a>>, AssetReaderError>> {
         Box::pin(async {
-            let name = path.file_stem().and_then(|d| d.to_str()).ok_or_else(|| {
-                AssetReaderError::Io(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "invalid filename passed",
-                ))
-            })?;
-            let name = name.to_lowercase();
+            let name = path
+                .file_stem()
+                .and_then(OsStr::to_str)
+                .map(str::to_lowercase)
+                .ok_or_else(|| {
+                    AssetReaderError::Io(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "invalid filename passed",
+                    ))
+                })?;
             let entry = self
                 .entries
                 .get(name.as_str())
